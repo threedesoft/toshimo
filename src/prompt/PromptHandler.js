@@ -81,28 +81,50 @@ class PromptHandler {
                 // Remove processing message
                 this.messages = this.messages.filter(m => m.id !== 'processing');
 
-                // Add AI response to chat
-                if (response.content) {
+                // Handle questions if any
+                if (response.requiresUserInput && response.questions) {
+                    // Add the initial response
                     this.messages.push({
                         role: 'assistant',
                         content: response.content
                     });
-                }
 
-                // Handle file changes
-                if (response.changes && response.changes.length > 0) {
-                    const changeMessages = await this.handleFileChanges(response.changes);
-                    this.messages.push(...changeMessages);
-                }
+                    // Add questions as numbered list
+                    const questionsText = response.questions.map((q, index) => {
+                        let optionsText = '';
+                        if (q.type === 'choice' && q.options) {
+                            optionsText = `\nOptions: ${q.options.join(', ')}`;
+                        }
+                        return `${index + 1}. ${q.text}${optionsText}`;
+                    }).join('\n\n');
 
-                // Handle terminal commands
-                if (response.commands && response.commands.length > 0) {
                     this.messages.push({
-                        role: 'system',
-                        content: `🚀 Executing commands:\n\`\`\`bash\n${response.commands.join('\n')}\`\`\``
+                        role: 'assistant',
+                        content: questionsText
                     });
-                }
+                } else {
+                    // Handle normal response
+                    if (response.content) {
+                        this.messages.push({
+                            role: 'assistant',
+                            content: response.content
+                        });
+                    }
 
+                    // Handle file changes
+                    if (response.changes && response.changes.length > 0) {
+                        const changeMessages = await this.handleFileChanges(response.changes);
+                        this.messages.push(...changeMessages);
+                    }
+
+                    // Handle terminal commands
+                    if (response.commands && response.commands.length > 0) {
+                        this.messages.push({
+                            role: 'system',
+                            content: `🚀 Executing commands:\n\`\`\`bash\n${response.commands.join('\n')}\`\`\``
+                        });
+                    }
+                }
             } catch (error) {
                 // Remove processing message
                 this.messages = this.messages.filter(m => m.id !== 'processing');
@@ -303,14 +325,6 @@ class PromptHandler {
                             font-family: var(--vscode-editor-font-family);
                             font-size: var(--vscode-editor-font-size);
                         }
-
-                        .diff-add {
-                            color: var(--vscode-gitDecoration-addedResourceForeground);
-                        }
-
-                        .diff-remove {
-                            color: var(--vscode-gitDecoration-deletedResourceForeground);
-                        }
                     </style>
                 </head>
                 <body>
@@ -335,7 +349,17 @@ class PromptHandler {
                             const chatForm = document.getElementById('chat-form');
                             let isProcessing = false;
 
-                            console.log('Chat interface initialized');
+                            function formatMessage(msg) {
+                                return formatMessageContent(msg.content);
+                            }
+
+                            function formatMessageContent(content) {
+                                return content
+                                    .replace(/\`\`\`(.*?)\`\`\`/gs, '<pre><code>$1</code></pre>')
+                                    .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
+                                    .replace(/\\n/g, '<br>')
+                                    .replace(/^- (.*)$/gm, '• $1');
+                            }
 
                             function sendMessage(e) {
                                 if (e) {
@@ -362,21 +386,13 @@ class PromptHandler {
                                 messageInput.style.height = 'auto';
                             }
 
-                            function formatMessage(content) {
-                                return content
-                                    .replace(/\`\`\`(.*?)\`\`\`/gs, '<pre><code>$1</code></pre>')
-                                    .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
-                                    .replace(/\\n/g, '<br>')
-                                    .replace(/^- (.*)$/gm, '• $1');
-                            }
-
                             function updateChat(messages) {
                                 console.log('Updating chat with messages:', messages);
                                 chatContainer.innerHTML = messages.map(msg => {
                                     const className = msg.role === 'user' ? 'user-message' : 
                                                     msg.role === 'system' ? 'system-message' : 
                                                     'assistant-message';
-                                    return \`<div class="message \${className}">\${formatMessage(msg.content)}</div>\`;
+                                    return \`<div class="message \${className}">\${formatMessage(msg)}</div>\`;
                                 }).join('');
                                 
                                 chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -395,9 +411,7 @@ class PromptHandler {
 
                             // Handle Enter key
                             messageInput.addEventListener('keydown', (e) => {
-                                console.log('Key pressed:', e.key);
                                 if (e.key === 'Enter' && !e.shiftKey) {
-                                    console.log('Enter pressed without shift');
                                     e.preventDefault();
                                     sendMessage();
                                 }

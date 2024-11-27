@@ -20,38 +20,38 @@ class AIAgent {
                 hasFileContent: !!fileContent
             });
 
-            // Get relevant context
+            // Get relevant context with proper metadata
             const context = await this.contextManager.getRelevantContext(
                 `${prompt}\n\nSelected Text:\n${selectedText}\n\nFile Content:\n${fileContent}`
             );
             
-            console.log('Got context:', context);
+            console.log('Got context from ContextManager:', context);
 
-            // Generate initial response from LLM
+            // Construct the full context object
+            const fullContext = {
+                prompt,
+                selectedText,
+                fileContent,
+                metadata: context.find(c => c.startsWith('Project Context:')),
+                relevantFiles: context.filter(c => !c.startsWith('Project Context:'))
+            };
+
+            console.log('Constructed full context:', fullContext);
+
+            // Generate initial response from LLM with full context
             let response = await this.llmService.generateResponse(prompt, context);
             
             console.log('Got LLM response:', response);
 
-            // Handle questions if any
+            // If response has questions, format them for chat interface
             if (response.requiresUserInput && response.questions?.length > 0) {
-                try {
-                    const answers = await this.handleQuestions(response.questions);
-                    this.userAnswers = { ...this.userAnswers, ...answers };
-                    
-                    // Get updated response with answers
-                    response = await this.llmService.generateResponse(
-                        `${prompt}\n\nUser Answers: ${JSON.stringify(this.userAnswers, null, 2)}`,
-                        context
-                    );
-                } catch (error) {
-                    console.error('Error handling questions:', error);
-                    return {
-                        content: "I encountered an error while processing your questions. Please try again.",
-                        changes: [],
-                        commands: [],
-                        tests: []
-                    };
-                }
+                return {
+                    content: "I need some additional information to better assist you:",
+                    questions: response.questions,
+                    requiresUserInput: true,
+                    changes: [],
+                    commands: []
+                };
             }
 
             return response;
@@ -67,74 +67,14 @@ class AIAgent {
     }
 
     async handleQuestions(questions) {
-        const answers = {};
-        
-        for (const question of questions) {
-            try {
-                let answer;
-                
-                switch (question.type) {
-                    case 'yes_no':
-                        answer = await vscode.window.showQuickPick(['Yes', 'No'], {
-                            placeHolder: question.text,
-                            title: `Question: ${question.text}`,
-                            canPickMany: false
-                        });
-                        answers[question.id] = answer === 'Yes';
-                        break;
-
-                    case 'choice':
-                        if (!question.options || !question.options.length) {
-                            throw new Error(`No options provided for choice question: ${question.id}`);
-                        }
-                        answer = await vscode.window.showQuickPick(question.options, {
-                            placeHolder: question.text,
-                            title: `Question: ${question.text}`,
-                            canPickMany: false
-                        });
-                        answers[question.id] = answer;
-                        break;
-
-                    case 'text':
-                        answer = await vscode.window.showInputBox({
-                            prompt: question.text,
-                            title: `Question: ${question.text}`,
-                            placeHolder: 'Type your answer here...'
-                        });
-                        answers[question.id] = answer;
-                        break;
-
-                    case 'confirmation':
-                        answer = await vscode.window.showInformationMessage(
-                            question.text,
-                            { modal: true },
-                            'Confirm',
-                            'Cancel'
-                        );
-                        answers[question.id] = answer === 'Confirm';
-                        break;
-
-                    default:
-                        console.warn(`Unknown question type: ${question.type}`);
-                        answer = await vscode.window.showInputBox({
-                            prompt: question.text,
-                            title: `Question: ${question.text}`,
-                            placeHolder: 'Type your answer here...'
-                        });
-                        answers[question.id] = answer;
-                }
-
-                if (answer === undefined) {
-                    throw new Error('Question was cancelled by user');
-                }
-
-            } catch (error) {
-                console.error(`Error handling question ${question.id}:`, error);
-                throw error;
-            }
-        }
-
-        return answers;
+        // Instead of showing popups, return the questions to be displayed in chat
+        return {
+            requiresUserInput: true,
+            questions: questions.map(q => ({
+                ...q,
+                answered: false
+            }))
+        };
     }
 
     async processResponse(response) {
