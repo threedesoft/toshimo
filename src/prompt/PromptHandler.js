@@ -4,53 +4,52 @@ class PromptHandler {
     constructor(context, aiAgent) {
         this.context = context;
         this.aiAgent = aiAgent;
-        this.currentPanel = null;
         this.messages = [];
+        
+        // Register the view provider
+        const provider = this._createWebviewViewProvider();
+        context.subscriptions.push(
+            vscode.window.registerWebviewViewProvider('toshimoChatView', provider, {
+                webviewOptions: {
+                    retainContextWhenHidden: true
+                }
+            })
+        );
+    }
+
+    _createWebviewViewProvider() {
+        return {
+            resolveWebviewView: (webviewView) => {
+                this.currentView = webviewView;
+                webviewView.webview.options = {
+                    enableScripts: true,
+                    localResourceRoots: []
+                };
+
+                // Initialize with welcome message
+                this.messages = [{
+                    role: 'assistant',
+                    content: 'Hello! I\'m Toshimo, your AI programming assistant. How can I help you today?'
+                }];
+
+                webviewView.webview.html = this._getChatWebviewContent();
+
+                webviewView.webview.onDidReceiveMessage(
+                    async message => {
+                        switch (message.command) {
+                            case 'sendMessage':
+                                await this.handleUserMessage(message.text);
+                                break;
+                        }
+                    }
+                );
+            }
+        };
     }
 
     async showPromptDialog() {
-        if (this.currentPanel) {
-            this.currentPanel.reveal();
-            return;
-        }
-
-        this.currentPanel = vscode.window.createWebviewPanel(
-            'toshimoChat',
-            'Chat with Toshimo',
-            vscode.ViewColumn.Beside,
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true
-            }
-        );
-
-        // Initialize with welcome message
-        this.messages = [{
-            role: 'assistant',
-            content: 'Hello! I\'m Toshimo, your AI programming assistant. How can I help you today?'
-        }];
-
-        this.currentPanel.webview.html = this._getChatWebviewContent();
-
-        this.currentPanel.webview.onDidReceiveMessage(
-            async message => {
-                switch (message.command) {
-                    case 'sendMessage':
-                        await this.handleUserMessage(message.text);
-                        break;
-                }
-            },
-            undefined,
-            this.context.subscriptions
-        );
-
-        this.currentPanel.onDidDispose(
-            () => {
-                this.currentPanel = null;
-            },
-            null,
-            this.context.subscriptions
-        );
+        // Focus or show the chat view
+        await vscode.commands.executeCommand('toshimoChatView.focus');
     }
 
     async handleUserMessage(text) {
@@ -182,8 +181,8 @@ class PromptHandler {
     }
 
     _updateChatView() {
-        if (this.currentPanel) {
-            this.currentPanel.webview.postMessage({
+        if (this.currentView) {
+            this.currentView.webview.postMessage({
                 command: 'updateChat',
                 messages: this.messages
             });

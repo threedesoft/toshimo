@@ -101,6 +101,35 @@
                     "description": "Maximum tokens to include in context"
                 }
             }
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "toshimo-sidebar",
+                    "title": "Toshimo",
+                    "icon": "$(comment-discussion)",
+                    "alignment": "right"
+                }
+            ]
+        },
+        "views": {
+            "toshimo-sidebar": [
+                {
+                    "type": "webview",
+                    "id": "toshimoChatView",
+                    "name": "Toshimo Chat",
+                    "icon": "$(comment-discussion)"
+                }
+            ]
+        },
+        "menus": {
+            "view/title": [
+                {
+                    "command": "toshimo.showQuickPick",
+                    "when": "view == toshimoChatView",
+                    "group": "navigation"
+                }
+            ]
         }
     }
 }
