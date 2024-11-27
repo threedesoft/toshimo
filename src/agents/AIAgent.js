@@ -14,14 +14,24 @@ class AIAgent {
 
     async processPrompt(prompt, selectedText, fileContent) {
         try {
+            console.log('AIAgent processing prompt:', {
+                prompt,
+                hasSelectedText: !!selectedText,
+                hasFileContent: !!fileContent
+            });
+
             // Get relevant context including selected text and file content
             const context = await this.contextManager.getRelevantContext(
                 `${prompt}\n\nSelected Text:\n${selectedText}\n\nFile Content:\n${fileContent}`
             );
 
+            console.log('Got context:', context);
+
             // Generate initial response from LLM
             let response = await this.llmService.generateResponse(prompt, context);
             
+            console.log('Got LLM response:', response);
+
             // Handle questions if any
             while (response.requiresUserInput && response.questions?.length) {
                 const answers = await this.handleQuestions(response.questions);
@@ -32,9 +42,14 @@ class AIAgent {
             }
 
             // Process the final response
-            await this.processResponse(response);
+            return await this.processResponse(response);
         } catch (error) {
-            ErrorHandler.handle(error, 'AIAgent.processPrompt');
+            console.error('Error in AIAgent.processPrompt:', error);
+            return {
+                content: `Error: ${error.message}`,
+                changes: [],
+                commands: []
+            };
         }
     }
 
