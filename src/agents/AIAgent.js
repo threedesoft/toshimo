@@ -20,11 +20,11 @@ class AIAgent {
                 hasFileContent: !!fileContent
             });
 
-            // Get relevant context including selected text and file content
+            // Get relevant context
             const context = await this.contextManager.getRelevantContext(
                 `${prompt}\n\nSelected Text:\n${selectedText}\n\nFile Content:\n${fileContent}`
             );
-
+            
             console.log('Got context:', context);
 
             // Generate initial response from LLM
@@ -33,24 +33,108 @@ class AIAgent {
             console.log('Got LLM response:', response);
 
             // Handle questions if any
-            while (response.requiresUserInput && response.questions?.length) {
-                const answers = await this.handleQuestions(response.questions);
-                this.userAnswers = { ...this.userAnswers, ...answers };
-                
-                // Get updated response with answers
-                response = await this.llmService.generateResponse(prompt, context);
+            if (response.requiresUserInput && response.questions?.length > 0) {
+                try {
+                    const answers = await this.handleQuestions(response.questions);
+                    this.userAnswers = { ...this.userAnswers, ...answers };
+                    
+                    // Get updated response with answers
+                    response = await this.llmService.generateResponse(
+                        `${prompt}\n\nUser Answers: ${JSON.stringify(this.userAnswers, null, 2)}`,
+                        context
+                    );
+                } catch (error) {
+                    console.error('Error handling questions:', error);
+                    return {
+                        content: "I encountered an error while processing your questions. Please try again.",
+                        changes: [],
+                        commands: [],
+                        tests: []
+                    };
+                }
             }
 
-            // Process the final response
-            return await this.processResponse(response);
+            return response;
         } catch (error) {
             console.error('Error in AIAgent.processPrompt:', error);
             return {
                 content: `Error: ${error.message}`,
                 changes: [],
-                commands: []
+                commands: [],
+                tests: []
             };
         }
+    }
+
+    async handleQuestions(questions) {
+        const answers = {};
+        
+        for (const question of questions) {
+            try {
+                let answer;
+                
+                switch (question.type) {
+                    case 'yes_no':
+                        answer = await vscode.window.showQuickPick(['Yes', 'No'], {
+                            placeHolder: question.text,
+                            title: `Question: ${question.text}`,
+                            canPickMany: false
+                        });
+                        answers[question.id] = answer === 'Yes';
+                        break;
+
+                    case 'choice':
+                        if (!question.options || !question.options.length) {
+                            throw new Error(`No options provided for choice question: ${question.id}`);
+                        }
+                        answer = await vscode.window.showQuickPick(question.options, {
+                            placeHolder: question.text,
+                            title: `Question: ${question.text}`,
+                            canPickMany: false
+                        });
+                        answers[question.id] = answer;
+                        break;
+
+                    case 'text':
+                        answer = await vscode.window.showInputBox({
+                            prompt: question.text,
+                            title: `Question: ${question.text}`,
+                            placeHolder: 'Type your answer here...'
+                        });
+                        answers[question.id] = answer;
+                        break;
+
+                    case 'confirmation':
+                        answer = await vscode.window.showInformationMessage(
+                            question.text,
+                            { modal: true },
+                            'Confirm',
+                            'Cancel'
+                        );
+                        answers[question.id] = answer === 'Confirm';
+                        break;
+
+                    default:
+                        console.warn(`Unknown question type: ${question.type}`);
+                        answer = await vscode.window.showInputBox({
+                            prompt: question.text,
+                            title: `Question: ${question.text}`,
+                            placeHolder: 'Type your answer here...'
+                        });
+                        answers[question.id] = answer;
+                }
+
+                if (answer === undefined) {
+                    throw new Error('Question was cancelled by user');
+                }
+
+            } catch (error) {
+                console.error(`Error handling question ${question.id}:`, error);
+                throw error;
+            }
+        }
+
+        return answers;
     }
 
     async processResponse(response) {
@@ -69,12 +153,6 @@ class AIAgent {
                 for (const command of response.commands) {
                     await this.terminalManager.executeCommand(command);
                 }
-            }
-
-            // Show the response content
-            const editor = vscode.window.activeTextEditor;
-            if (editor && response.content) {
-                await vscode.window.showInformationMessage(response.content);
             }
 
             return response;

@@ -195,6 +195,8 @@ class PromptHandler {
             <!DOCTYPE html>
             <html>
                 <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <style>
                         body {
                             padding: 0;
@@ -222,6 +224,7 @@ class PromptHandler {
                             border-radius: 12px;
                             margin: 4px 0;
                             white-space: pre-wrap;
+                            word-wrap: break-word;
                         }
                         
                         .user-message {
@@ -251,29 +254,37 @@ class PromptHandler {
                             border-top: 1px solid var(--vscode-input-border);
                             display: flex;
                             gap: 10px;
+                            align-items: flex-end;
                         }
                         
                         #message-input {
                             flex: 1;
+                            min-height: 40px;
+                            max-height: 200px;
                             padding: 8px;
                             background-color: var(--vscode-input-background);
                             color: var(--vscode-input-foreground);
                             border: 1px solid var(--vscode-input-border);
                             border-radius: 4px;
-                            resize: none;
+                            resize: vertical;
                             font-family: var(--vscode-font-family);
-                            min-height: 40px;
+                            line-height: 1.4;
                         }
                         
                         #send-button {
                             padding: 8px 16px;
+                            height: 40px;
                             background-color: var(--vscode-button-background);
                             color: var(--vscode-button-foreground);
                             border: none;
                             border-radius: 4px;
                             cursor: pointer;
                             font-family: var(--vscode-font-family);
-                            align-self: flex-end;
+                            white-space: nowrap;
+                        }
+                        
+                        #send-button:hover:not(:disabled) {
+                            background-color: var(--vscode-button-hoverBackground);
                         }
                         
                         #send-button:disabled {
@@ -305,97 +316,116 @@ class PromptHandler {
                 </head>
                 <body>
                     <div id="chat-container"></div>
-                    <div id="input-container">
-                        <textarea 
-                            id="message-input" 
-                            placeholder="Type your message here... (Press Enter to send)"
-                        ></textarea>
-                        <button id="send-button">Send</button>
-                    </div>
+                    <form id="chat-form">
+                        <div id="input-container">
+                            <textarea 
+                                id="message-input" 
+                                placeholder="Type your message here... (Press Enter to send)"
+                                rows="1"
+                            ></textarea>
+                            <button type="submit" id="send-button">Send</button>
+                        </div>
+                    </form>
+
                     <script>
-                        const vscode = acquireVsCodeApi();
-                        const chatContainer = document.getElementById('chat-container');
-                        const messageInput = document.getElementById('message-input');
-                        const sendButton = document.getElementById('send-button');
-                        let isProcessing = false;
+                        (function() {
+                            const vscode = acquireVsCodeApi();
+                            const chatContainer = document.getElementById('chat-container');
+                            const messageInput = document.getElementById('message-input');
+                            const sendButton = document.getElementById('send-button');
+                            const chatForm = document.getElementById('chat-form');
+                            let isProcessing = false;
 
-                        function sendMessage() {
-                            const text = messageInput.value.trim();
-                            if (!text || isProcessing) return;
-                            
-                            console.log('Sending message:', text);
-                            
-                            isProcessing = true;
-                            sendButton.disabled = true;
-                            messageInput.disabled = true;
-                            
-                            vscode.postMessage({
-                                command: 'sendMessage',
-                                text: text
+                            console.log('Chat interface initialized');
+
+                            function sendMessage(e) {
+                                if (e) {
+                                    e.preventDefault();
+                                }
+                                
+                                const text = messageInput.value.trim();
+                                if (!text || isProcessing) {
+                                    console.log('Message empty or processing, ignoring');
+                                    return;
+                                }
+                                
+                                console.log('Sending message:', text);
+                                isProcessing = true;
+                                sendButton.disabled = true;
+                                messageInput.disabled = true;
+                                
+                                vscode.postMessage({
+                                    command: 'sendMessage',
+                                    text: text
+                                });
+                                
+                                messageInput.value = '';
+                                messageInput.style.height = 'auto';
+                            }
+
+                            function formatMessage(content) {
+                                return content
+                                    .replace(/\`\`\`(.*?)\`\`\`/gs, '<pre><code>$1</code></pre>')
+                                    .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
+                                    .replace(/\\n/g, '<br>')
+                                    .replace(/^- (.*)$/gm, '• $1');
+                            }
+
+                            function updateChat(messages) {
+                                console.log('Updating chat with messages:', messages);
+                                chatContainer.innerHTML = messages.map(msg => {
+                                    const className = msg.role === 'user' ? 'user-message' : 
+                                                    msg.role === 'system' ? 'system-message' : 
+                                                    'assistant-message';
+                                    return \`<div class="message \${className}">\${formatMessage(msg.content)}</div>\`;
+                                }).join('');
+                                
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                                
+                                if (!messages.some(m => m.id === 'processing')) {
+                                    console.log('Re-enabling input');
+                                    isProcessing = false;
+                                    sendButton.disabled = false;
+                                    messageInput.disabled = false;
+                                    messageInput.focus();
+                                }
+                            }
+
+                            // Handle form submission
+                            chatForm.addEventListener('submit', sendMessage);
+
+                            // Handle Enter key
+                            messageInput.addEventListener('keydown', (e) => {
+                                console.log('Key pressed:', e.key);
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    console.log('Enter pressed without shift');
+                                    e.preventDefault();
+                                    sendMessage();
+                                }
                             });
+
+                            // Handle messages from extension
+                            window.addEventListener('message', event => {
+                                console.log('Received message from extension:', event.data);
+                                const message = event.data;
+                                switch (message.command) {
+                                    case 'updateChat':
+                                        updateChat(message.messages);
+                                        break;
+                                }
+                            });
+
+                            // Initialize with welcome message
+                            console.log('Initializing chat');
+                            updateChat([{
+                                role: 'assistant',
+                                content: 'Hello! I\\'m Toshimo, your AI programming assistant. How can I help you today?'
+                            }]);
                             
-                            messageInput.value = '';
-                        }
-
-                        function formatMessage(content) {
-                            return content
-                                .replace(/\`\`\`(\w+)\n([\s\S]*?)\`\`\`/g, '<pre><code class="language-$1">$2</code></pre>')
-                                .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
-                                .replace(/\n/g, '<br>')
-                                .replace(/^- (.*)$/gm, '• $1');
-                        }
-
-                        function updateChat(messages) {
-                            console.log('Updating chat with messages:', messages);
-                            chatContainer.innerHTML = messages.map(msg => {
-                                const className = msg.role === 'user' ? 'user-message' : 
-                                                msg.role === 'system' ? 'system-message' : 
-                                                'assistant-message';
-                                return \`<div class="message \${className}">\${formatMessage(msg.content)}</div>\`;
-                            }).join('');
-                            
-                            chatContainer.scrollTop = chatContainer.scrollHeight;
-                            
-                            // Re-enable input if not processing
-                            if (!messages.some(m => m.id === 'processing')) {
-                                isProcessing = false;
-                                sendButton.disabled = false;
-                                messageInput.disabled = false;
-                                messageInput.focus();
-                            }
-                        }
-
-                        // Handle Enter key
-                        messageInput.addEventListener('keydown', (e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                sendMessage();
-                            }
-                        });
-
-                        // Handle Send button click
-                        sendButton.addEventListener('click', () => {
-                            sendMessage();
-                        });
-
-                        // Handle messages from extension
-                        window.addEventListener('message', event => {
-                            const message = event.data;
-                            switch (message.command) {
-                                case 'updateChat':
-                                    updateChat(message.messages);
-                                    break;
-                            }
-                        });
-
-                        // Initialize with empty chat
-                        updateChat([{
-                            role: 'assistant',
-                            content: 'Hello! I\'m Toshimo, your AI programming assistant. How can I help you today?'
-                        }]);
-                        
-                        // Focus input on load
-                        messageInput.focus();
+                            // Focus input on load
+                            messageInput.focus();
+                            console.log('Chat interface ready');
+                        })();
                     </script>
                 </body>
             </html>
