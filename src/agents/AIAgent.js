@@ -14,28 +14,67 @@ class AIAgent {
 
     async processPrompt(prompt, selectedText, fileContent) {
         try {
-            // Get relevant context including selected text and file content
+            console.log('AIAgent processing prompt:', {
+                prompt,
+                hasSelectedText: !!selectedText,
+                hasFileContent: !!fileContent
+            });
+
+            // Get relevant context with proper metadata
             const context = await this.contextManager.getRelevantContext(
                 `${prompt}\n\nSelected Text:\n${selectedText}\n\nFile Content:\n${fileContent}`
             );
+            
+            console.log('Got context from ContextManager:', context);
 
-            // Generate initial response from LLM
+            // Construct the full context object
+            const fullContext = {
+                prompt,
+                selectedText,
+                fileContent,
+                metadata: context.find(c => c.startsWith('Project Context:')),
+                relevantFiles: context.filter(c => !c.startsWith('Project Context:'))
+            };
+
+            console.log('Constructed full context:', fullContext);
+
+            // Generate initial response from LLM with full context
             let response = await this.llmService.generateResponse(prompt, context);
             
-            // Handle questions if any
-            while (response.requiresUserInput && response.questions?.length) {
-                const answers = await this.handleQuestions(response.questions);
-                this.userAnswers = { ...this.userAnswers, ...answers };
-                
-                // Get updated response with answers
-                response = await this.llmService.generateResponse(prompt, context);
+            console.log('Got LLM response:', response);
+
+            // If response has questions, format them for chat interface
+            if (response.requiresUserInput && response.questions?.length > 0) {
+                return {
+                    content: "I need some additional information to better assist you:",
+                    questions: response.questions,
+                    requiresUserInput: true,
+                    changes: [],
+                    commands: []
+                };
             }
 
-            // Process the final response
-            await this.processResponse(response);
+            return response;
         } catch (error) {
-            ErrorHandler.handle(error, 'AIAgent.processPrompt');
+            console.error('Error in AIAgent.processPrompt:', error);
+            return {
+                content: `Error: ${error.message}`,
+                changes: [],
+                commands: [],
+                tests: []
+            };
         }
+    }
+
+    async handleQuestions(questions) {
+        // Instead of showing popups, return the questions to be displayed in chat
+        return {
+            requiresUserInput: true,
+            questions: questions.map(q => ({
+                ...q,
+                answered: false
+            }))
+        };
     }
 
     async processResponse(response) {
@@ -54,12 +93,6 @@ class AIAgent {
                 for (const command of response.commands) {
                     await this.terminalManager.executeCommand(command);
                 }
-            }
-
-            // Show the response content
-            const editor = vscode.window.activeTextEditor;
-            if (editor && response.content) {
-                await vscode.window.showInformationMessage(response.content);
             }
 
             return response;

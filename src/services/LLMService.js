@@ -262,24 +262,12 @@ class LLMService {
         }
     }
 
-    constructPrompt(prompt, context, previousAnswers) {
-        // If the prompt explicitly asks for JSON
-        if (prompt.includes('in JSON format')) {
-            return `${prompt}
-
-Important: Your response must be valid JSON. Do not include any explanatory text outside the JSON structure.
-If you need to include code examples, put them inside JSON string values.`;
-        }
-
-        // Extract codebase metadata if it exists
-        let codebaseContext = '';
+    constructPrompt(prompt, context) {
+        // Extract metadata context if it exists
+        let metadataContext = '';
         const metadataEntry = context.find(c => c.startsWith('Project Context:'));
         if (metadataEntry) {
-            codebaseContext = `
-Codebase Information:
-${metadataEntry}
-
-`;
+            metadataContext = `\nCodebase Information:\n${metadataEntry}\n`;
             // Remove the metadata from the regular context
             context = context.filter(c => !c.startsWith('Project Context:'));
         }
@@ -288,7 +276,7 @@ ${metadataEntry}
 As an AI programming assistant, analyze the following request and provide a comprehensive solution.
 If you need critical information that could significantly impact the implementation, you may ask questions.
 
-${codebaseContext}
+${metadataContext}
 Guidelines for asking questions:
 1. Only ask when the answer would significantly impact the implementation
 2. Don't ask about:
@@ -304,9 +292,6 @@ Guidelines for asking questions:
 
 Context:
 ${context.join('\n\n')}
-
-Previous Answers:
-${previousAnswers ? JSON.stringify(previousAnswers, null, 2) : 'None'}
 
 User Request:
 ${prompt}
