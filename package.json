@@ -1,0 +1,106 @@
+{
+    "name": "toshimo",
+    "displayName": "Toshimo - AI Coding Assistant",
+    "description": "AI-powered coding assistant with multi-LLM support and comprehensive testing",
+    "version": "0.1.0",
+    "publisher": "Threedesoft",
+    "author": {
+        "name": "Threedesoft"
+    },
+    "engines": {
+        "vscode": "^1.73.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Machine Learning",
+        "Testing",
+        "Other"
+    ],
+    "keywords": [
+        "ai",
+        "coding",
+        "assistant",
+        "testing",
+        "automation"
+    ],
+    "main": "./src/extension.js",
+    "dependencies": {
+        "axios": "^1.6.2"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.73.0",
+        "eslint": "^8.39.0",
+        "nodemon": "^3.1.7",
+        "vsce": "^2.15.0"
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run lint",
+        "watch": "nodemon --watch src --ext js,json --verbose --exec \"echo File changed\"",
+        "lint": "eslint src --ext js",
+        "test": "jest"
+    },
+    "contributes": {
+        "commands": [
+            {
+                "command": "toshimo.showQuickPick",
+                "title": "Toshimo: Show AI Assistant Menu"
+            },
+            {
+                "command": "toshimo.showPrompt",
+                "title": "Toshimo: Ask AI Assistant"
+            },
+            {
+                "command": "toshimo.openConfig",
+                "title": "Toshimo: Open Configuration"
+            },
+            {
+                "command": "toshimo.initializeCodebase",
+                "title": "Toshimo: Initialize Codebase"
+            }
+        ],
+        "configuration": {
+            "title": "Toshimo",
+            "properties": {
+                "toshimo.llm.provider": {
+                    "type": "string",
+                    "default": "ollama",
+                    "enum": ["ollama", "openai", "claude"],
+                    "description": "Select the AI provider to use"
+                },
+                "toshimo.llm.model": {
+                    "type": "string",
+                    "default": "llama2",
+                    "description": "Model to use for the selected provider"
+                },
+                "toshimo.llm.endpoint": {
+                    "type": "string",
+                    "default": "http://localhost:11434",
+                    "description": "API endpoint for the selected provider"
+                },
+                "toshimo.llm.apiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "API key for the selected provider (not required for Ollama)"
+                },
+                "toshimo.llm.parameters": {
+                    "type": "object",
+                    "default": {
+                        "maxTokens": 2000,
+                        "temperature": 0.7
+                    },
+                    "description": "Additional parameters for the LLM"
+                },
+                "toshimo.context.maxFiles": {
+                    "type": "number",
+                    "default": 10,
+                    "description": "Maximum number of files to include in context"
+                },
+                "toshimo.context.maxTokens": {
+                    "type": "number",
+                    "default": 4000,
+                    "description": "Maximum tokens to include in context"
+                }
+            }
+        }
+    }
+}
