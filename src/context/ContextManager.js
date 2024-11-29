@@ -16,6 +16,67 @@ class ContextManager {
         this.codebaseContext = null;
         this.isInitializing = false;
         this.fileList = [];
+
+        // Standard folders to ignore across all languages/frameworks
+        this.standardIgnores = {
+            general: [
+                '.git', '.svn', '.hg',                    // Version control
+                '.vscode', '.idea', '.vs',                // IDEs
+                'build', 'dist', 'out', 'target',         // Build outputs
+                'coverage', '.nyc_output',                // Test coverage
+                '.DS_Store', 'Thumbs.db',                 // OS files
+                'tmp', 'temp', 'logs', 'log',             // Temporary files
+                '.env', '.env.local', '.env.*'            // Environment files
+            ],
+            node: [
+                'node_modules',
+                '.npm',
+                '.yarn',
+                '.pnpm-store'
+            ],
+            python: [
+                '__pycache__',
+                '*.pyc',
+                '.pytest_cache',
+                '.tox',
+                '.venv',
+                'venv',
+                'env',
+                'ENV',
+                'htmlcov',
+                '*.egg-info'
+            ],
+            java: [
+                'target',
+                '.gradle',
+                'build',
+                '.m2',
+                '*.class',
+                'bin'
+            ],
+            dotnet: [
+                'bin',
+                'obj',
+                'packages',
+                '.vs',
+                'TestResults'
+            ],
+            rust: [
+                'target',
+                'Cargo.lock',
+                '.cargo'
+            ],
+            go: [
+                'vendor',
+                'bin',
+                'pkg'
+            ],
+            ruby: [
+                'vendor/bundle',
+                '.bundle',
+                'coverage'
+            ]
+        };
     }
 
     async initializeCodebase() {
@@ -78,6 +139,28 @@ class ContextManager {
                 }
             } else {
                 console.warn('No data to save in vector DB');
+            }
+
+            // Get .gitignore patterns if available
+            const gitIgnorePatterns = await this.getGitIgnorePatterns(workspaceRoot);
+
+            // Get directory tree
+            const directoryTree = await this.getDirectoryTree(workspaceRoot, gitIgnorePatterns);
+
+            // Add directory tree to context
+            const treeContext = {
+                directoryTree: directoryTree,
+                ignoredPatterns: gitIgnorePatterns,
+                standardIgnores: this.standardIgnores
+            };
+
+            // Save tree context
+            const treeContextFile = path.join(toshimoDir, 'toshimo.tree.json');
+            await fs.writeFile(treeContextFile, JSON.stringify(treeContext, null, 2));
+
+            // Add tree to codebase context
+            if (this.codebaseContext) {
+                this.codebaseContext.directoryStructure = directoryTree;
             }
 
         } catch (error) {
@@ -338,22 +421,153 @@ The response should be a valid JSON object with the following structure:
     }
 
     async getRelevantContext(query) {
-        const context = await this.vectorDB.search(query);
-        
-        // Add codebase metadata to context if available
-        if (this.codebaseContext) {
-            const formattedContext = `Project Context:
+        try {
+            // Get vector search results
+            const searchResults = await this.vectorDB.search(query);
+            let context = [...searchResults];  // Create a copy of search results
+            
+            // Get workspace root
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                console.warn('No workspace folder found');
+                return context;
+            }
+
+            // Load toshimo.context file
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const contextFile = path.join(workspaceRoot, '.toshimo', 'toshimo.context');
+
+            try {
+                const contextData = await fs.readFile(contextFile, 'utf8');
+                const projectContext = JSON.parse(contextData);
+                
+                // Format project context
+                const formattedContext = `Project Context:
+{
+    "projectType": "${projectContext.projectType || 'unknown'}",
+    "mainLanguages": ${JSON.stringify(projectContext.mainLanguages || [], null, 2)},
+    "frameworks": ${JSON.stringify(projectContext.frameworks || [], null, 2)},
+    "architecture": ${JSON.stringify(projectContext.architecture || {
+        type: "unknown",
+        components: []
+    }, null, 2)},
+    "keyFeatures": ${JSON.stringify(projectContext.keyFeatures || [], null, 2)},
+    "dependencies": ${JSON.stringify(projectContext.dependencies || [], null, 2)}
+}`;
+
+                // Add project context at the beginning
+                context.unshift(formattedContext);
+                
+                console.log('Added project context from toshimo.context');
+            } catch (error) {
+                console.warn('Failed to load toshimo.context:', error);
+                // If no context file exists, add basic metadata
+                if (this.codebaseContext) {
+                    const basicContext = `Project Context:
 {
     "languages": ${JSON.stringify(this.codebaseContext.languages || [], null, 2)},
     "frameworks": ${JSON.stringify(this.codebaseContext.frameworks || [], null, 2)},
     "projectType": "${this.codebaseContext.projectType || 'unknown'}",
     "dependencies": ${JSON.stringify(this.codebaseContext.dependencies || [], null, 2)},
-    "architecture": ${JSON.stringify(this.codebaseContext.architecture || [], null, 2)}
+    "architecture": ${JSON.stringify(this.codebaseContext.architecture || {
+        type: "unknown",
+        components: []
+    }, null, 2)}
 }`;
-            context.unshift(formattedContext);
+                    context.unshift(basicContext);
+                }
+            }
+            
+            return context;
+        } catch (error) {
+            console.error('Error getting relevant context:', error);
+            return [];
         }
+    }
+
+    async getGitIgnorePatterns(rootPath) {
+        try {
+            const gitIgnorePath = path.join(rootPath, '.gitignore');
+            const content = await fs.readFile(gitIgnorePath, 'utf8');
+            return content
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'));
+        } catch {
+            return [];
+        }
+    }
+
+    async getDirectoryTree(dir, gitIgnorePatterns = [], depth = 0, maxDepth = 10) {
+        if (depth >= maxDepth) return null;
+
+        const tree = { name: path.basename(dir), type: 'directory', children: [] };
         
-        return context;
+        try {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                const relativePath = path.relative(this.workspaceRoot || dir, fullPath);
+
+                // Check if should be ignored
+                if (this.shouldIgnore(relativePath, gitIgnorePatterns)) {
+                    continue;
+                }
+
+                if (entry.isDirectory()) {
+                    const subtree = await this.getDirectoryTree(
+                        fullPath,
+                        gitIgnorePatterns,
+                        depth + 1,
+                        maxDepth
+                    );
+                    if (subtree) {
+                        tree.children.push(subtree);
+                    }
+                } else if (entry.isFile()) {
+                    tree.children.push({
+                        name: entry.name,
+                        type: 'file',
+                        extension: path.extname(entry.name),
+                        relativePath: relativePath
+                    });
+                }
+            }
+        } catch (error) {
+            console.warn(`Error reading directory ${dir}:`, error);
+        }
+
+        return tree;
+    }
+
+    shouldIgnore(filePath, gitIgnorePatterns) {
+        // Check standard ignores
+        for (const category of Object.values(this.standardIgnores)) {
+            for (const pattern of category) {
+                if (this.matchesPattern(filePath, pattern)) {
+                    return true;
+                }
+            }
+        }
+
+        // Check gitignore patterns
+        for (const pattern of gitIgnorePatterns) {
+            if (this.matchesPattern(filePath, pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    matchesPattern(filePath, pattern) {
+        // Convert glob pattern to regex
+        const regex = pattern
+            .replace(/\./g, '\\.')
+            .replace(/\*/g, '.*')
+            .replace(/\?/g, '.');
+        return new RegExp(`^${regex}$`).test(filePath);
     }
 }
 

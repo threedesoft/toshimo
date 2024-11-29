@@ -104,7 +104,15 @@ class LLMService {
                 }
             };
 
-            console.log('Ollama request body:', JSON.stringify(requestBody, null, 2));
+            // Format the request body for better readability
+            console.log('Ollama request body:');
+            console.log('='.repeat(80));
+            console.log('Model:', requestBody.model);
+            console.log('Options:', JSON.stringify(requestBody.options, null, 2));
+            console.log('Prompt:');
+            console.log('-'.repeat(80));
+            console.log(requestBody.prompt);
+            console.log('='.repeat(80));
 
             const response = await axios.post(
                 `${this.config.endpoint}/api/generate`,
@@ -312,7 +320,6 @@ class LLMService {
 
         return `
 You are Toshimo, an AI programming assistant with access to various tools. You can use these tools to help users with their requests.
-Make reasonable assumptions when possible instead of asking questions. Only ask questions for critical information that would significantly impact the implementation.
 
 System Information:
 Operating System: ${this.platformInfo.isWindows ? 'Windows' : this.platformInfo.isMac ? 'macOS' : 'Linux'}
@@ -346,7 +353,7 @@ Available Tools:
 4. WebScraper
    - scrape(url)
 
-When you need to use tools, format your response as a JSON block with the following structure:
+Format your response as a JSON block with the following structure:
 <RESPONSE_START>
 {
     "actions": [
@@ -384,18 +391,14 @@ Important Tool Guidelines:
 5. When showing diffs, use actual file content, not placeholders
 
 Question Guidelines:
-1. Only ask questions for truly critical information that would significantly impact the implementation
+1. DO NOT ask questions for any reason.
 2. Make reasonable assumptions based on:
    - Common development practices
    - Standard patterns
    - Context from the codebase
    - Previous conversation history
-3. DO NOT ask questions about:
-   - Minor implementation details
-   - Formatting preferences
-   - Non-critical options
-   - Things that can be reasonably assumed
-4. If multiple approaches are valid, choose the most standard one instead of asking
+3. If multiple approaches are valid, choose the most standard one instead of asking
+4. Assume thingss as per industry standard
 
 ${metadataContext}
 
@@ -420,80 +423,95 @@ Remember to:
         try {
             console.log('Original response:', response);
             
-            // First, normalize the response string
-            let normalizedResponse = response
-                .replace(/\r\n/g, '') // Remove Windows line endings
-                .replace(/\n/g, '')   // Remove Unix line endings
-                .replace(/\s+/g, ' ') // Replace multiple spaces with single space
-                .trim();              // Remove leading/trailing whitespace
-
-            console.log('Normalized response:', normalizedResponse);
-            
-            // Look for response between markers with a more lenient pattern
+            // First, find the markers
             const startMarker = '<RESPONSE_START>';
-            const endMarker = '<RESPONSE_END>';
+            const endMarkers = ['<RESPONSE_END>', '</RESPONSE_END>']; // Support both formats
             
-            const startIndex = normalizedResponse.indexOf(startMarker);
-            const endIndex = normalizedResponse.lastIndexOf(endMarker);
+            const startIndex = response.indexOf(startMarker);
             
-            console.log('Marker positions:', { startIndex, endIndex });
-
-            if (startIndex !== -1 && endIndex !== -1 && startIndex < endIndex) {
-                try {
-                    // Extract everything between the markers
-                    const jsonStr = normalizedResponse
-                        .substring(startIndex + startMarker.length, endIndex)
-                        .trim();
-                    
-                    console.log('Extracted JSON string:', jsonStr);
-
-                    // Additional validation
-                    if (!jsonStr.startsWith('{') || !jsonStr.endsWith('}')) {
-                        throw new Error('Invalid JSON structure');
-                    }
-
-                    const parsedResponse = JSON.parse(jsonStr);
-                    console.log('Parsed response:', parsedResponse);
-
-                    return {
-                        content: parsedResponse.chat || response,
-                        actions: parsedResponse.actions || [],
-                        questions: parsedResponse.questions || [],
-                        requiresUserInput: parsedResponse.questions?.length > 0
-                    };
-                } catch (jsonError) {
-                    console.error('JSON parsing error:', {
-                        error: jsonError,
-                        originalResponse: response,
-                        normalizedResponse: normalizedResponse,
-                        extractedJson: jsonStr,
-                        startIndex,
-                        endIndex,
-                        markerLength: startMarker.length,
-                        substring: normalizedResponse.substring(startIndex, endIndex + endMarker.length)
-                    });
-                    throw jsonError;
+            // Find the first occurring end marker
+            let endIndex = -1;
+            let usedEndMarker = '';
+            for (const marker of endMarkers) {
+                const index = response.indexOf(marker);
+                if (index !== -1 && (endIndex === -1 || index < endIndex)) {
+                    endIndex = index;
+                    usedEndMarker = marker;
                 }
             }
+            
+            if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) {
+                console.log('No valid response markers found:', {
+                    responseLength: response.length,
+                    hasStartMarker: startIndex !== -1,
+                    hasEndMarker: endIndex !== -1,
+                    startIndex,
+                    endIndex,
+                    checkedEndMarkers: endMarkers,
+                    foundEndMarker: usedEndMarker
+                });
+                return {
+                    content: response,
+                    actions: [],
+                    questions: [],
+                    requiresUserInput: false
+                };
+            }
 
-            // If no JSON found, log the response for debugging
-            console.log('No JSON structure found in response:', {
-                responseLength: normalizedResponse.length,
-                fullResponse: normalizedResponse,
-                hasStartMarker: normalizedResponse.includes(startMarker),
-                hasEndMarker: normalizedResponse.includes(endMarker),
-                startIndex,
-                endIndex,
-                firstFewChars: normalizedResponse.substring(0, 50),
-                lastFewChars: normalizedResponse.substring(normalizedResponse.length - 50)
-            });
+            // Extract everything between markers
+            const markedContent = response.substring(
+                startIndex + startMarker.length,
+                endIndex
+            );
 
-            return {
-                content: response,
-                actions: [],
-                questions: [],
-                requiresUserInput: false
-            };
+            // Clean up the extracted content
+            let jsonStr = markedContent
+                .replace(/^\s+|\s+$/g, '')  // Trim whitespace
+                .replace(/[\r\n]/g, '')     // Remove all newlines
+                .replace(/\s+/g, ' ');      // Normalize spaces
+
+            console.log('Extracted and cleaned JSON string:', jsonStr);
+
+            try {
+                // Additional validation
+                if (!jsonStr.startsWith('{') || !jsonStr.endsWith('}')) {
+                    throw new Error('Invalid JSON structure');
+                }
+
+                const parsedResponse = JSON.parse(jsonStr);
+                console.log('Parsed response:', parsedResponse);
+
+                // Filter out invalid questions
+                if (parsedResponse.questions) {
+                    parsedResponse.questions = parsedResponse.questions.filter(q => {
+                        // Remove questions that are:
+                        // 1. Empty text
+                        // 2. Type 'none'
+                        // 3. Missing required fields
+                        return q.text?.trim() && 
+                               q.type !== 'none' && 
+                               q.id?.trim() &&
+                               q.type?.trim();
+                    });
+                }
+
+                return {
+                    content: parsedResponse.chat || response,
+                    actions: parsedResponse.actions || [],
+                    questions: parsedResponse.questions || [],
+                    requiresUserInput: parsedResponse.questions?.length > 0
+                };
+            } catch (jsonError) {
+                console.error('JSON parsing error:', {
+                    error: jsonError,
+                    markedContent,
+                    jsonStr,
+                    startIndex,
+                    endIndex,
+                    usedEndMarker
+                });
+                throw jsonError;
+            }
         } catch (error) {
             console.error('Error parsing LLM response:', error);
             return {
