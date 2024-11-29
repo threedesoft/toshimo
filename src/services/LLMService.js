@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { ErrorHandler, ToshimoError, ErrorType } = require('../utils/ErrorHandler');
+const os = require('os');
 
 class LLMService {
     constructor(configManager) {
@@ -21,46 +22,24 @@ class LLMService {
             };
             console.log('Using default config:', this.config);
         }
+        this.platform = os.platform();
+        this.platformInfo = {
+            platform: this.platform,
+            isWindows: this.platform === 'win32',
+            isMac: this.platform === 'darwin',
+            isLinux: this.platform === 'linux',
+            shell: process.env.SHELL || (this.platform === 'win32' ? 'cmd.exe' : '/bin/bash')
+        };
     }
 
-    validateConfig() {
-        console.log('Validating LLM config...');
-        try {
-            if (!this.config) {
-                console.log('No config found, using defaults');
-                this.config = {
-                    provider: 'ollama',
-                    model: 'llama3.2',
-                    endpoint: 'http://localhost:11434'
-                };
-            }
-
-            if (!this.config.provider) {
-                console.log('No provider specified, defaulting to Ollama');
-                this.config.provider = 'ollama';
-                this.config.model = 'llama3.2';
-                this.config.endpoint = 'http://localhost:11434';
-            }
-
-            console.log('Config validation successful:', this.config);
-            return true;
-        } catch (error) {
-            console.warn('Config validation failed, using Ollama defaults:', error.message);
-            this.config = {
-                provider: 'ollama',
-                model: 'llama3.2>',
-                endpoint: 'http://localhost:11434'
-            };
-            return true;
-        }
-    }
-
-    async generateResponse(prompt, context) {
+    async generateResponse(prompt, context, chatHistory = []) {
+        console.log("=======================================")
         console.log('Generating response with:', {
             provider: this.config.provider,
             model: this.config.model,
             promptLength: prompt.length,
-            contextSize: context.length
+            contextSize: context.length,
+            historySize: chatHistory.length
         });
 
         return ErrorHandler.withErrorHandling(
@@ -77,46 +56,51 @@ class LLMService {
                 console.log('Using provider:', this.config.provider);
                 switch (this.config.provider) {
                     case 'claude':
-                        return await this.callClaude(prompt, context);
+                        return await this.callClaude(prompt, context, chatHistory);
                     case 'openai':
-                        return await this.callOpenAI(prompt, context);
+                        return await this.callOpenAI(prompt, context, chatHistory);
                     case 'ollama':
-                        return await this.callOllama(prompt, context);
+                        return await this.callOllama(prompt, context, chatHistory);
                     default:
                         console.warn(`Unsupported provider ${this.config.provider}, falling back to Ollama`);
                         this.config.provider = 'ollama';
-                        return await this.callOllama(prompt, context);
+                        return await this.callOllama(prompt, context, chatHistory);
                 }
             },
             'LLMService.generateResponse',
             {
                 content: 'Failed to generate response. Please check the error message and try again.',
-                changes: [],
-                commands: [],
-                tests: [],
+                actions: [],
                 questions: [],
                 requiresUserInput: false
             }
         );
     }
 
-    async callOllama(prompt, context) {
+    async callOllama(prompt, context, chatHistory = []) {
         try {
             console.log('Calling Ollama API:', {
                 endpoint: `${this.config.endpoint}/api/generate`,
                 model: this.config.model,
                 promptLength: prompt.length,
                 temperature: this.config.parameters?.temperature || 0.7,
-                maxTokens: this.config.parameters?.maxTokens || 2000
+                maxTokens: this.config.parameters?.maxTokens || 50000,
+                historyLength: chatHistory.length
+            });
+
+            const fullPrompt = this.constructPrompt(prompt, context, chatHistory);
+            console.log('Constructed prompt with history:', {
+                promptLength: fullPrompt.length,
+                hasHistory: chatHistory.length > 0
             });
 
             const requestBody = {
                 model: this.config.model,
-                prompt: this.constructPrompt(prompt, context),
+                prompt: fullPrompt,
                 stream: false,
                 options: {
                     temperature: this.config.parameters?.temperature || 0.7,
-                    num_predict: this.config.parameters?.maxTokens || 2000
+                    num_predict: this.config.parameters?.maxTokens || 50000
                 }
             };
 
@@ -131,7 +115,7 @@ class LLMService {
                 status: response.status,
                 headers: response.headers,
                 responseLength: response.data?.response?.length,
-                response: response.data?.response?.substring(0, 200) + '...' // First 200 chars
+                response: response.data?.response //?.substring(0, 200) + '...' // First 200 chars
             });
 
             return this.parseResponse(response.data.response);
@@ -165,8 +149,14 @@ class LLMService {
         }
     }
 
-    async callOpenAI(prompt, context) {
+    async callOpenAI(prompt, context, chatHistory = []) {
         try {
+            console.log('Calling OpenAI API:', {
+                model: this.config.model || 'gpt-4',
+                maxTokens: this.config.parameters?.maxTokens || 50000,
+                temperature: this.config.parameters?.temperature || 0.7
+            });
+
             const response = await axios.post(
                 'https://api.openai.com/v1/chat/completions',
                 {
@@ -174,14 +164,18 @@ class LLMService {
                     messages: [
                         {
                             role: 'system',
-                            content: 'You are a helpful AI programming assistant.'
+                            content: this.constructPrompt('', context, [])
                         },
+                        ...chatHistory.map(msg => ({
+                            role: msg.role === 'assistant' ? 'assistant' : 'user',
+                            content: msg.content
+                        })),
                         {
                             role: 'user',
-                            content: this.constructPrompt(prompt, context)
+                            content: prompt
                         }
                     ],
-                    max_tokens: this.config.parameters?.maxTokens || 2000,
+                    max_tokens: this.config.parameters?.maxTokens || 50000,
                     temperature: this.config.parameters?.temperature || 0.7
                 },
                 {
@@ -192,8 +186,21 @@ class LLMService {
                 }
             );
 
+            console.log('OpenAI API response:', {
+                status: response.status,
+                headers: response.headers,
+                responseLength: response.data?.choices?.[0]?.message?.content?.length
+            });
+
             return this.parseResponse(response.data.choices[0].message.content);
         } catch (error) {
+            console.error('OpenAI API error:', {
+                message: error.message,
+                code: error.code,
+                response: error.response?.data,
+                stack: error.stack
+            });
+
             if (error.isAxiosError) {
                 if (error.response?.status === 401) {
                     throw new ToshimoError(
@@ -216,18 +223,29 @@ class LLMService {
         }
     }
 
-    async callClaude(prompt, context) {
+    async callClaude(prompt, context, chatHistory = []) {
         try {
+            console.log('Calling Claude API:', {
+                model: this.config.model || 'claude-3-opus-20240229',
+                maxTokens: this.config.parameters?.maxTokens || 50000
+            });
+
             const response = await axios.post(
                 'https://api.anthropic.com/v1/messages',
                 {
                     model: this.config.model || 'claude-3-opus-20240229',
-                    max_tokens: this.config.parameters?.maxTokens || 2000,
-                    messages: [{
-                        role: 'user',
-                        content: this.constructPrompt(prompt, context)
-                    }],
-                    system: "You are a helpful AI programming assistant. When suggesting code changes, format them as markdown codeblocks with the file path (e.g., ```language:path/to/file). Always explain your changes."
+                    max_tokens: this.config.parameters?.maxTokens || 50000,
+                    messages: [
+                        ...chatHistory.map(msg => ({
+                            role: msg.role === 'assistant' ? 'assistant' : 'user',
+                            content: msg.content
+                        })),
+                        {
+                            role: 'user',
+                            content: this.constructPrompt(prompt, context, chatHistory)
+                        }
+                    ],
+                    system: "You are a helpful AI programming assistant with access to various tools. Format your responses according to the prompt guidelines."
                 },
                 {
                     headers: {
@@ -238,8 +256,21 @@ class LLMService {
                 }
             );
 
+            console.log('Claude API response:', {
+                status: response.status,
+                headers: response.headers,
+                responseLength: response.data?.content?.[0]?.text?.length
+            });
+
             return this.parseResponse(response.data.content[0].text);
         } catch (error) {
+            console.error('Claude API error:', {
+                message: error.message,
+                code: error.code,
+                response: error.response?.data,
+                stack: error.stack
+            });
+
             if (error.isAxiosError) {
                 if (error.response?.status === 401) {
                     throw new ToshimoError(
@@ -262,167 +293,217 @@ class LLMService {
         }
     }
 
-    constructPrompt(prompt, context) {
+    constructPrompt(prompt, context, chatHistory = []) {
         // Extract metadata context if it exists
         let metadataContext = '';
         const metadataEntry = context.find(c => c.startsWith('Project Context:'));
         if (metadataEntry) {
             metadataContext = `\nCodebase Information:\n${metadataEntry}\n`;
-            // Remove the metadata from the regular context
             context = context.filter(c => !c.startsWith('Project Context:'));
         }
 
+        // Format chat history with clear separation
+        const formattedHistory = chatHistory.length > 0 
+            ? '\nPrevious Conversation:\n' + chatHistory
+                .slice(-10) // Keep last 10 messages
+                .map(msg => `${msg.role.toUpperCase()}: ${msg.content}`)
+                .join('\n\n')
+            : '\nNo previous conversation.';
+
         return `
-As an AI programming assistant, analyze the following request and provide a comprehensive solution.
-If you need critical information that could significantly impact the implementation, you may ask questions.
+You are Toshimo, an AI programming assistant with access to various tools. You can use these tools to help users with their requests.
+Make reasonable assumptions when possible instead of asking questions. Only ask questions for critical information that would significantly impact the implementation.
+
+System Information:
+Operating System: ${this.platformInfo.isWindows ? 'Windows' : this.platformInfo.isMac ? 'macOS' : 'Linux'}
+Shell: ${this.platformInfo.shell}
+
+When generating terminal commands:
+${this.platformInfo.isWindows ? `
+- Use Windows command prompt syntax
+- Replace forward slashes with backslashes in paths
+- Don't use sudo commands
+- Use 'set' instead of 'export' for environment variables
+- Use Windows-specific commands (dir, type, etc.)` : `
+- Use Unix/Linux command syntax
+- Use forward slashes in paths
+- Use appropriate sudo commands when needed
+- Use Unix-specific commands (ls, cat, etc.)`}
+
+Available Tools:
+1. FileManager
+   - createFile(filePath, content)
+   - readFile(filePath)
+   - fileExists(filePath)
+
+2. FileEditor
+   - editFile(filePath, changes)
+   - showDiff(filePath, originalContent, newContent)
+
+3. TerminalClient
+   - executeCommand(command) // Commands will be automatically formatted for the current OS
+
+4. WebScraper
+   - scrape(url)
+
+When you need to use tools, format your response as a JSON block with the following structure:
+<RESPONSE_START>
+{
+    "actions": [
+        {
+            "tool": "FileManager",
+            "command": "readFile",
+            "params": ["path/to/file"]
+        }
+    ],
+    "chat": "Your explanation of what you're doing",
+    "questions": [
+        {
+            "id": "unique_id",
+            "text": "Question text",
+            "type": "yes_no|choice|text",
+            "options": ["option1", "option2"],
+            "importance": "high|medium|low"
+        }
+    ]
+}
+<RESPONSE_END>
+
+Important JSON Guidelines:
+1. Use the exact markers <RESPONSE_START> and <RESPONSE_END> to wrap your JSON
+2. Do not use backticks or markdown formatting
+3. Properly escape all special characters in strings
+4. Use double quotes for all JSON strings
+5. Keep file paths simple without escape characters
+
+Important Tool Guidelines:
+1. Always use FileManager.readFile before attempting to edit or show diffs
+2. File paths should be exact (e.g., "Dockerfile", not "dockerfile.txt")
+3. Tool names must be exactly: FileManager, FileEditor, TerminalClient, or WebScraper
+4. For file edits, first read the file, then use FileEditor.editFile with the updated content
+5. When showing diffs, use actual file content, not placeholders
+
+Question Guidelines:
+1. Only ask questions for truly critical information that would significantly impact the implementation
+2. Make reasonable assumptions based on:
+   - Common development practices
+   - Standard patterns
+   - Context from the codebase
+   - Previous conversation history
+3. DO NOT ask questions about:
+   - Minor implementation details
+   - Formatting preferences
+   - Non-critical options
+   - Things that can be reasonably assumed
+4. If multiple approaches are valid, choose the most standard one instead of asking
 
 ${metadataContext}
-Guidelines for asking questions:
-1. Only ask when the answer would significantly impact the implementation
-2. Don't ask about:
-   - Personal preferences
-   - Minor implementation details
-   - Things that can be reasonably assumed based on best practices
-3. Do ask about:
-   - Critical business requirements
-   - Security requirements if dealing with sensitive data
-   - Specific integration requirements
-   - Performance requirements if critical
-   - Breaking changes that need confirmation
 
 Context:
 ${context.join('\n\n')}
 
+${formattedHistory}
+
 User Request:
 ${prompt}
 
-If you need to ask questions, format them as:
-\`\`\`questions
-[
-  {
-    "id": "unique_id",
-    "text": "Question text",
-    "type": "yes_no|choice|text|confirmation",
-    "options": ["option1", "option2"], // Only for choice type
-    "context": "Why this question is important",
-    "importance": "high|medium|low"
-  }
-]
-\`\`\`
-
-Based on the codebase context and project structure, provide a solution that aligns with the existing architecture and patterns.
-Format any code changes as markdown codeblocks with file paths (e.g., \`\`\`language:path/to/file).
+Remember to:
+1. Use tools for file operations, don't include file content in chat
+2. Keep chat responses focused on high-level steps
+3. Make reasonable assumptions when possible
+4. Use WebScraper for any web content you need
+5. Maintain conversation context using chat history
 `;
     }
 
     parseResponse(response) {
         try {
-            // If response is already valid JSON, return parsed object
-            try {
-                const jsonResponse = JSON.parse(response);
-                return {
-                    content: response,
-                    changes: [],
-                    commands: [],
-                    tests: [],
-                    questions: [],
-                    requiresUserInput: false,
-                    jsonData: jsonResponse
-                };
-            } catch (e) {
-                // Not valid JSON, continue with normal parsing
+            console.log('Original response:', response);
+            
+            // First, normalize the response string
+            let normalizedResponse = response
+                .replace(/\r\n/g, '') // Remove Windows line endings
+                .replace(/\n/g, '')   // Remove Unix line endings
+                .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                .trim();              // Remove leading/trailing whitespace
+
+            console.log('Normalized response:', normalizedResponse);
+            
+            // Look for response between markers with a more lenient pattern
+            const startMarker = '<RESPONSE_START>';
+            const endMarker = '<RESPONSE_END>';
+            
+            const startIndex = normalizedResponse.indexOf(startMarker);
+            const endIndex = normalizedResponse.lastIndexOf(endMarker);
+            
+            console.log('Marker positions:', { startIndex, endIndex });
+
+            if (startIndex !== -1 && endIndex !== -1 && startIndex < endIndex) {
+                try {
+                    // Extract everything between the markers
+                    const jsonStr = normalizedResponse
+                        .substring(startIndex + startMarker.length, endIndex)
+                        .trim();
+                    
+                    console.log('Extracted JSON string:', jsonStr);
+
+                    // Additional validation
+                    if (!jsonStr.startsWith('{') || !jsonStr.endsWith('}')) {
+                        throw new Error('Invalid JSON structure');
+                    }
+
+                    const parsedResponse = JSON.parse(jsonStr);
+                    console.log('Parsed response:', parsedResponse);
+
+                    return {
+                        content: parsedResponse.chat || response,
+                        actions: parsedResponse.actions || [],
+                        questions: parsedResponse.questions || [],
+                        requiresUserInput: parsedResponse.questions?.length > 0
+                    };
+                } catch (jsonError) {
+                    console.error('JSON parsing error:', {
+                        error: jsonError,
+                        originalResponse: response,
+                        normalizedResponse: normalizedResponse,
+                        extractedJson: jsonStr,
+                        startIndex,
+                        endIndex,
+                        markerLength: startMarker.length,
+                        substring: normalizedResponse.substring(startIndex, endIndex + endMarker.length)
+                    });
+                    throw jsonError;
+                }
             }
 
-            const result = {
+            // If no JSON found, log the response for debugging
+            console.log('No JSON structure found in response:', {
+                responseLength: normalizedResponse.length,
+                fullResponse: normalizedResponse,
+                hasStartMarker: normalizedResponse.includes(startMarker),
+                hasEndMarker: normalizedResponse.includes(endMarker),
+                startIndex,
+                endIndex,
+                firstFewChars: normalizedResponse.substring(0, 50),
+                lastFewChars: normalizedResponse.substring(normalizedResponse.length - 50)
+            });
+
+            return {
                 content: response,
-                changes: [],
-                commands: [],
-                tests: [],
+                actions: [],
                 questions: [],
                 requiresUserInput: false
             };
-
-            // Extract questions if any
-            const questionsMatch = response.match(/```questions\n([\s\S]*?)```/);
-            if (questionsMatch) {
-                result.questions = JSON.parse(questionsMatch[1]);
-                result.requiresUserInput = true;
-                return result;
-            }
-
-            // Extract code blocks with file paths
-            const codeBlockRegex = /```(\w+):([^\n]+)\n([\s\S]*?)```/g;
-            let match;
-
-            while ((match = codeBlockRegex.exec(response)) !== null) {
-                const [, _language, filePath, content] = match;
-                if (!filePath || !content) {
-                    console.warn('Invalid code block format detected:', match[0]);
-                    continue;
-                }
-
-                // Check if it's a test file
-                if (filePath.includes('.test.') || filePath.includes('.spec.') || filePath.includes('__tests__')) {
-                    const testCases = this.extractTestCases(content);
-                    result.tests.push({
-                        file: filePath.trim(),
-                        content: content.trim(),
-                        testCases
-                    });
-                } else {
-                    result.changes.push({
-                        file: filePath.trim(),
-                        content: content.trim()
-                    });
-                }
-            }
-
-            // Extract terminal commands
-            const commandRegex = /```terminal\n([\s\S]*?)```/g;
-            while ((match = commandRegex.exec(response)) !== null) {
-                const commands = match[1].trim().split('\n').filter(cmd => cmd.trim());
-                if (commands.length) {
-                    result.commands.push(...commands);
-                }
-            }
-
-            return result;
         } catch (error) {
-            throw new ToshimoError(
-                ErrorType.Unknown,
-                'Failed to parse LLM response',
-                error
-            );
+            console.error('Error parsing LLM response:', error);
+            return {
+                content: `Error parsing response: ${error.message}\n\nOriginal response:\n${response}`,
+                actions: [],
+                questions: [],
+                requiresUserInput: false
+            };
         }
     }
-
-    async callModel(prompt, options = {}) {
-        try {
-            const response = await axios.post(`${this.endpoint}/api/generate`, {
-                model: this.model,
-                prompt: prompt,
-                ...options
-            });
-
-            // Handle different response formats
-            if (response.data && response.data.response) {
-                try {
-                    // Try parsing as JSON first
-                    return JSON.parse(response.data.response);
-                } catch (e) {
-                    // If not JSON, return as is
-                    return response.data.response;
-                }
-            }
-            
-            throw new Error('Invalid response format from LLM');
-        } catch (error) {
-            console.error('LLM call failed:', error);
-            throw error;
-        }
-    }
-
-    // ... rest of the methods with similar conversion ...
 }
 
 module.exports = { LLMService }; 

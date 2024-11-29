@@ -73,7 +73,7 @@ class ConfigurationPanel {
                         
                         <div id="parameters">
                             <input type="number" id="temperature" value="${currentConfig.parameters?.temperature || 0.7}" placeholder="Temperature" min="0" max="1" step="0.1" />
-                            <input type="number" id="maxTokens" value="${currentConfig.parameters?.maxTokens || 2000}" placeholder="Max Tokens" />
+                            <input type="number" id="maxTokens" value="${currentConfig.parameters?.maxTokens || 50000}" placeholder="Max Tokens" />
                         </div>
                         
                         <div id="ollamaConfig" style="display: ${currentConfig.provider === 'ollama' ? 'block' : 'none'}">
