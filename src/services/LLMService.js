@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { ErrorHandler, ToshimoError, ErrorType } = require('../utils/ErrorHandler');
 const os = require('os');
+const { CodeContext } = require('../context/CodeContext');
 
 class LLMService {
     constructor(configManager) {
@@ -30,6 +31,12 @@ class LLMService {
             isLinux: this.platform === 'linux',
             shell: process.env.SHELL || (this.platform === 'win32' ? 'cmd.exe' : '/bin/bash')
         };
+        this.codeContext = new CodeContext();
+        this.initializeCodeContext();
+    }
+
+    async initializeCodeContext() {
+        await this.codeContext.initialize();
     }
 
     async generateResponse(prompt, context, chatHistory = []) {
@@ -318,6 +325,9 @@ class LLMService {
                 .join('\n\n')
             : '\nNo previous conversation.';
 
+        // Add code context
+        const codeContext = this.codeContext.getFormattedContext();
+
         return `
 You are Toshimo, an AI programming assistant with access to various tools. You can use these tools to help users with their requests.
 
@@ -347,10 +357,7 @@ Available Tools:
    - editFile(filePath, changes)
    - showDiff(filePath, originalContent, newContent)
 
-3. TerminalClient
-   - executeCommand(command) // Commands will be automatically formatted for the current OS
-
-4. WebScraper
+3. WebScraper
    - scrape(url)
 
 Format your response as a JSON block with the following structure:
@@ -384,9 +391,9 @@ Important JSON Guidelines:
 5. Keep file paths simple without escape characters
 
 Important Tool Guidelines:
-1. Always use FileManager.readFile before attempting to edit or show diffs
+1. Read from CodeContext before using FileManager
 2. File paths should be exact (e.g., "Dockerfile", not "dockerfile.txt")
-3. Tool names must be exactly: FileManager, FileEditor, TerminalClient, or WebScraper
+3. Tool names must be exactly: FileManager, FileEditor, or WebScraper
 4. For file edits, first read the file, then use FileEditor.editFile with the updated content
 5. When showing diffs, use actual file content, not placeholders
 
@@ -416,6 +423,8 @@ Remember to:
 3. Make reasonable assumptions when possible
 4. Use WebScraper for any web content you need
 5. Maintain conversation context using chat history
+
+${codeContext}
 `;
     }
 
