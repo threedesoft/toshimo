@@ -335,18 +335,6 @@ System Information:
 Operating System: ${this.platformInfo.isWindows ? 'Windows' : this.platformInfo.isMac ? 'macOS' : 'Linux'}
 Shell: ${this.platformInfo.shell}
 
-When generating terminal commands:
-${this.platformInfo.isWindows ? `
-- Use Windows command prompt syntax
-- Replace forward slashes with backslashes in paths
-- Don't use sudo commands
-- Use 'set' instead of 'export' for environment variables
-- Use Windows-specific commands (dir, type, etc.)` : `
-- Use Unix/Linux command syntax
-- Use forward slashes in paths
-- Use appropriate sudo commands when needed
-- Use Unix-specific commands (ls, cat, etc.)`}
-
 Available Tools:
 1. FileManager
    - createFile(filePath, content)
